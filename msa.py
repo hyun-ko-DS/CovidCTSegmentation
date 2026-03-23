@@ -16,7 +16,6 @@ class MSABlock(nn.Module):
 
         # --- 0. [Residual Scaling] Skip Connection 강도 설정 ---
         # 목적: 인코더의 오리지널 정보를 보존하면서 MSA의 보정치만 효과적으로 섞음.
-        # alphadent 프로젝트의 핵심 전략을 이식하여 모델이 길을 잃지 않게 붙잡아주는 안전장치.
         self.alpha = alpha
 
         # --- 1. [안전 장치] 채널 배분 로직 ---
@@ -61,7 +60,7 @@ class MSABlock(nn.Module):
         )
 
         # --- 4. 융합 (Final Fusion) ---
-        # 정제된 공간 정보(Spatial)와 의미 정보(Semantic)를 하나로 통합하여 데코더로 전달.
+        # 정제된 공간 정보(Spatial)와 의미 정보(Semantic)를 하나로 통합하여 디코더로 전달.
         self.fuse = nn.Conv2d(in_channels, in_channels, kernel_size=1)
 
     def forward(self, x):
@@ -80,3 +79,32 @@ class MSABlock(nn.Module):
         # x: 기존의 안정적인 신호 흐름 보존
         # alpha * msa_out: MSA가 찾아낸 새로운 힌트를 적절한 강도로 추가
         return x + self.alpha * msa_out
+
+class MSASkipUnet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # 전역 함수인 get_model_tools()를 호출해 base_model을 가져옵니다.
+        base_obj, _, _ = get_model_tools()
+        self.base_model = base_obj
+
+        encoder_channels = self.base_model.encoder.out_channels
+
+        self.msa_blocks = nn.ModuleList([
+            MSABlock(ch) for ch in encoder_channels
+        ])
+
+    def forward(self, x):
+        # 인코더는 base_model의 것을 사용
+        features = self.base_model.encoder(x)
+
+        # Skip Connection마다 MSA 적용
+        msa_features = []
+        for i, feat in enumerate(features):
+            msa_feat = self.msa_blocks[i](feat)
+            msa_features.append(msa_feat)
+
+        # 디코더에 리스트로 전달
+        decoder_output = self.base_model.decoder(msa_features)
+        masks = self.base_model.segmentation_head(decoder_output)
+
+        return masks

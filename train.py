@@ -1,3 +1,6 @@
+from loss import DiceFocalLoss
+from msa import MSABlock, MSASkipUnet
+
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -156,17 +159,17 @@ def get_msa_unet_tools():
     )
     return model, criterion, optimizer
 
-def train_msa_model_holdout(train_loader, val_loader):
+def train_model(train_loader, val_loader):
     # wandb 초기화 생략 (필요 시 주석 해제)
     run = wandb.init(
         project="covid-19-segmentation",
         name=f"{RUN_NAME}",
-        config=CONFIG,
+        config=config,
         reinit=True
     )
 
     model, criterion, optimizer = get_msa_unet_tools()
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["epochs"])
 
     best_model_path = os.path.join(SAVE_DIR, "best.pt")
     last_model_path = os.path.join(SAVE_DIR, "last.pt") # last.pt 경로 추가
@@ -265,8 +268,8 @@ def run_training_pipeline(
     path, config_path="config.json", base_path="./results", run_name="exp_25_best_model"):
 
     # 0. 설정 로드 및 실행 컨텍스트 설정
-    global config
-    config = load_config(config_path)
+    # global config
+    # config = load_config(config_path)
     RUN_NAME = run_name
     SAVE_DIR = os.path.join(base_path, run_name)
     os.makedirs(SAVE_DIR, exist_ok=True)
@@ -277,13 +280,7 @@ def run_training_pipeline(
     images_radiopedia = np.load(os.path.join("data", "images_radiopedia.npy"))
     masks_radiopedia = np.load(os.path.join("data", "masks_radiopedia.npy"))
     test_images_medseg = np.load(os.path.join("data", "test_images_medseg.npy"))
-
     print("모든 데이터 로드 완료!\n")
-    # print_stats("Images Medseg", images_medseg)
-    # print_stats("Masks Medseg", masks_medseg)
-    # print_stats("Images Radiopedia", images_radiopedia)
-    # print_stats("Masks Radiopedia", masks_radiopedia)
-    # print_stats("Test Images", test_images_medseg)
 
     X_med_norm = apply_lung_window(images_medseg)
     X_rad_norm = apply_lung_window(images_radiopedia)
@@ -314,10 +311,10 @@ def run_training_pipeline(
     ])
 
     X_train, X_val, Y_train, Y_val = train_test_split(
-    X_all, Y_all,
-    test_size=config['validation_size'],
-    random_state=config['seed'],
-    shuffle=True)
+        X_all, Y_all,
+        test_size=config['validation_size'],
+        random_state=config['seed'],
+        shuffle=True)
 
 
     # 3. 데이터셋, 데이터로더 정의
@@ -341,6 +338,6 @@ def run_training_pipeline(
     print("✅ 데이터로더 정의 완료")
 
     # 4. 모델 학습
-    # best_trained_model = train_msa_model_holdout(train_loader, val_loader)
-    # return best_trained_model
+    best_trained_model = train_model(train_loader, val_loader)
+    return best_trained_model
 
