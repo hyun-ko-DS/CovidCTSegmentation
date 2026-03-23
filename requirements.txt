@@ -1,10 +1,17 @@
-torch==2.2.2
-torchvision==0.17.2
-torchaudio==2.2.2
-segmentation-models-pytorch==0.3.3
-torchmetrics==1.3.2
-numpy==1.26.4
+numpy==2.0.2
 pandas==2.2.2
+torch==2.10.0
+torchvision==0.25.0
+torchaudio==2.10.0
 
-wandb
-kagglehub
+segmentation-models-pytorch==0.5.0
+torchmetrics==1.9.0
+
+albumentations==2.0.8
+scikit-learn==1.6.1
+matplotlib==3.10.0
+seaborn==0.13.2
+tqdm==4.67.3
+wandb==0.25.1
+kagglehub==1.0.0
+python-dotenv==1.0.1

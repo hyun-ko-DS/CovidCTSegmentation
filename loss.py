@@ -12,7 +12,7 @@ config = load_config()
 
 class DiceFocalLoss(nn.Module):
     def __init__(self, gamma=config['gamma'], alpha=config['alpha'], 
-                smooth=config['smooth'], class_weights=config['class_weights']):
+                smooth=config['smooth'], class_weights=torch.tensor(config['class_weights']).to(config['device'])):
         super(DiceFocalLoss, self).__init__()
         self.gamma = gamma      # 어려운 샘플에 집중하는 정도
         self.alpha = alpha      # 클래스 불균형 조절 가중치

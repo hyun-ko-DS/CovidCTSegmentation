@@ -13,7 +13,8 @@ def run_loading_pipeline(
     local_data_dir="./data",
 ):
     if login_wandb:
-        wandb_key = load_dotenv(".env").get("WANDB_API_KEY")
+        load_dotenv(".env")
+        wandb_key = os.getenv("WANDB_API_KEY")
         if wandb_key:
             wandb.login(key=wandb_key)
             print("Wandb logged in successfully")
