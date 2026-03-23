@@ -1,0 +1,23 @@
+import os
+import eda, msa
+from loader import run_loading_pipeline
+# from train import run_training_pipeline
+
+if __name__ == "__main__":
+    BASE_PATH = "./results"
+    RUN_NAME = 'exp_25_best_model'
+    SAVE_DIR = os.path.join(BASE_PATH, RUN_NAME)
+    os.makedirs(SAVE_DIR, exist_ok=True)
+
+    run_loading_pipeline(login_wandb=True)
+
+    # run_training_pipeline(
+    #     path=BASE_PATH,
+    #     X_train=X_train,
+    #     Y_train=Y_train,
+    #     X_val=X_val,
+    #     Y_val=Y_val,
+    #     config_path="config.json",
+    #     base_path="./results",
+    #     run_name="exp_25_best_model",
+    # )

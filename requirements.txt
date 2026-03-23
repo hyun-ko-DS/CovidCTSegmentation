@@ -1,0 +1,10 @@
+torch==2.2.2
+torchvision==0.17.2
+torchaudio==2.2.2
+segmentation-models-pytorch==0.3.3
+torchmetrics==1.3.2
+numpy==1.26.4
+pandas==2.2.2
+
+wandb
+kagglehub
