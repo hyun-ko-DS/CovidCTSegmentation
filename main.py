@@ -1,7 +1,7 @@
 import os
-import eda, msa
+# import eda, msa
 from loader import run_loading_pipeline
-# from train import run_training_pipeline
+from train import run_training_pipeline
 
 if __name__ == "__main__":
     BASE_PATH = "./results"
@@ -11,13 +11,9 @@ if __name__ == "__main__":
 
     run_loading_pipeline(login_wandb=True)
 
-    # run_training_pipeline(
-    #     path=BASE_PATH,
-    #     X_train=X_train,
-    #     Y_train=Y_train,
-    #     X_val=X_val,
-    #     Y_val=Y_val,
-    #     config_path="config.json",
-    #     base_path="./results",
-    #     run_name="exp_25_best_model",
-    # )
+    run_training_pipeline(
+        path=BASE_PATH,
+        config_path="config.json",
+        base_path="./results",
+        run_name="exp_final_best_model",
+    )

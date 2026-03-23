@@ -2,12 +2,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
-import seaborn as sns
 import shutil
+import json
+from pathlib import Path
 
 import albumentations as A
 import segmentation_models_pytorch as smp
-from sklearn.model_selection import train_test_split, KFold
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_score, recall_score, f1_score, jaccard_score
 import torch
 from torchmetrics.functional.classification import multiclass_f1_score
@@ -16,8 +17,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm.auto import tqdm
-
-import kagglehub
 
 class CovidDataset(Dataset):
     def __init__(self, images, masks, transform=None):
@@ -74,13 +73,12 @@ class MSASkipUnet(nn.Module):
         return masks
 
 class EarlyStopping:
-    def __init__(self, patience=CONFIG['patience'], verbose=False, delta=0, path='checkpoint.pth'):
+    def __init__(self, patience=20, verbose=False, delta=0, path='checkpoint.pth'):
         self.patience = patience
         self.verbose = verbose
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-        # np.Inf 대신 np.inf (소문자) 사용
         self.val_loss_min = np.inf
         self.delta = delta
         self.path = path
@@ -116,9 +114,9 @@ def apply_lung_window(images):
     # 1. 타입 변환
     images = images.astype(np.float32)
 
-    # 2. 폐 영역 윈도잉 (HU 기준 -1000 ~ 400 설정)
-    window_min = -1500.0
-    window_max = 500.0
+    # 2. 폐 영역 윈도잉
+    window_min = config['window_min']
+    window_max = config['window_max']
 
     # 범위를 벗어나는 값은 잘라냄 (Clipping)
     images = np.clip(images, window_min, window_max)
@@ -173,9 +171,9 @@ def train_msa_model_holdout(train_loader, val_loader):
     best_model_path = os.path.join(SAVE_DIR, "best.pt")
     last_model_path = os.path.join(SAVE_DIR, "last.pt") # last.pt 경로 추가
 
-    early_stopping = EarlyStopping(patience=CONFIG["patience"], verbose=True, path=best_model_path)
+    early_stopping = EarlyStopping(patience=config["patience"], verbose=True, path=best_model_path)
 
-    for epoch in range(CONFIG["epochs"]):
+    for epoch in range(config["epochs"]):
         current_epoch = epoch + 1
         is_f1_step = (current_epoch % 5 == 0)
 
@@ -185,8 +183,8 @@ def train_msa_model_holdout(train_loader, val_loader):
         train_pbar = tqdm(train_loader, desc=f"Epoch {current_epoch} MSA-Train", leave=False)
 
         for imgs, msks in train_pbar:
-            imgs, msks = imgs.to(CONFIG["device"]), msks.to(CONFIG["device"])
-            if msks.shape[1] != CONFIG["classes"]:
+            imgs, msks = imgs.to(config["device"]), msks.to(config["device"])
+            if msks.shape[1] != config["classes"]:
                 msks = msks.permute(0, 3, 1, 2).float()
 
             optimizer.zero_grad()
@@ -205,8 +203,8 @@ def train_msa_model_holdout(train_loader, val_loader):
 
         with torch.no_grad():
             for imgs, msks in val_loader:
-                imgs, msks = imgs.to(CONFIG["device"]), msks.to(CONFIG["device"])
-                if msks.shape[1] != CONFIG["classes"]:
+                imgs, msks = imgs.to(config["device"]), msks.to(config["device"])
+                if msks.shape[1] != config["classes"]:
                     msks = msks.permute(0, 3, 1, 2).float()
 
                 outputs = model(imgs)
@@ -242,7 +240,7 @@ def train_msa_model_holdout(train_loader, val_loader):
         if is_f1_step:
             y_pred = torch.cat(all_preds).view(-1)
             y_true = torch.cat(all_targets).view(-1)
-            f1_scores = multiclass_f1_score(y_pred, y_true, num_classes=CONFIG["classes"], average=None)
+            f1_scores = multiclass_f1_score(y_pred, y_true, num_classes=config["classes"], average=None)
 
             class_names = ["GGO", "Consol", "C3", "C4"]
             f1_dict = {f"f1_{class_names[i]}": f1_scores[i].item() for i in range(len(f1_scores))}
@@ -264,42 +262,33 @@ def train_msa_model_holdout(train_loader, val_loader):
     return model
 
 def run_training_pipeline(
-    path,
-    X_train,
-    Y_train,
-    X_val,
-    Y_val,
-    config_path="config.json",
-    base_path="./results",
-    run_name="exp_25_best_model",
-):
-    global config, RUN_NAME, SAVE_DIR
+    path, config_path="config.json", base_path="./results", run_name="exp_25_best_model"):
 
     # 0. 설정 로드 및 실행 컨텍스트 설정
+    global config
     config = load_config(config_path)
     RUN_NAME = run_name
     SAVE_DIR = os.path.join(base_path, run_name)
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     # 1. 이미지 로드 및 전처리
-    images_medseg = np.load(os.path.join(path, "images_medseg.npy"))
-    masks_medseg = np.load(os.path.join(path, "masks_medseg.npy"))
-    images_radiopedia = np.load(os.path.join(path, "images_radiopedia.npy"))
-    masks_radiopedia = np.load(os.path.join(path, "masks_radiopedia.npy"))
-    test_images_medseg = np.load(os.path.join(path, "test_images_medseg.npy"))
+    images_medseg = np.load(os.path.join("data", "images_medseg.npy"))
+    masks_medseg = np.load(os.path.join("data", "masks_medseg.npy"))
+    images_radiopedia = np.load(os.path.join("data", "images_radiopedia.npy"))
+    masks_radiopedia = np.load(os.path.join("data", "masks_radiopedia.npy"))
+    test_images_medseg = np.load(os.path.join("data", "test_images_medseg.npy"))
 
     print("모든 데이터 로드 완료!\n")
-    print_stats("Images Medseg", images_medseg)
-    print_stats("Masks Medseg", masks_medseg)
-    print_stats("Images Radiopedia", images_radiopedia)
-    print_stats("Masks Radiopedia", masks_radiopedia)
-    print_stats("Test Images", test_images_medseg)
+    # print_stats("Images Medseg", images_medseg)
+    # print_stats("Masks Medseg", masks_medseg)
+    # print_stats("Images Radiopedia", images_radiopedia)
+    # print_stats("Masks Radiopedia", masks_radiopedia)
+    # print_stats("Test Images", test_images_medseg)
 
     X_med_norm = apply_lung_window(images_medseg)
     X_rad_norm = apply_lung_window(images_radiopedia)
     X_all = np.concatenate([X_med_norm, X_rad_norm], axis=0)
     Y_all = np.concatenate([masks_medseg, masks_radiopedia], axis=0).astype(np.float32)
-    _ = (X_all, Y_all)
 
     # 2. 데이터 증강
     train_transform = A.Compose([
@@ -324,9 +313,18 @@ def run_training_pipeline(
         ),
     ])
 
+    X_train, X_val, Y_train, Y_val = train_test_split(
+    X_all, Y_all,
+    test_size=config['validation_size'],
+    random_state=config['seed'],
+    shuffle=True)
+
+
     # 3. 데이터셋, 데이터로더 정의
     train_dataset = CovidDataset(X_train, Y_train, transform=train_transform)
     val_dataset = CovidDataset(X_val, Y_val, transform=None)
+    print("✅ 데이터 분할 완료")
+    print(f"🏠 Train: {len(train_dataset)}장 | 🏥 Val: {len(val_dataset)}장")
 
     train_loader = DataLoader(
         train_dataset,
@@ -340,10 +338,9 @@ def run_training_pipeline(
         shuffle=False,
         num_workers=config["num_workers"],
     )
-    print("✅ 데이터 분할 완료")
-    print(f"🏠 Train: {len(train_dataset)}장 | 🏥 Val: {len(val_dataset)}장")
+    print("✅ 데이터로더 정의 완료")
 
     # 4. 모델 학습
-    best_trained_model = train_msa_model_holdout(train_loader, val_loader)
-    return best_trained_model
+    # best_trained_model = train_msa_model_holdout(train_loader, val_loader)
+    # return best_trained_model
 
