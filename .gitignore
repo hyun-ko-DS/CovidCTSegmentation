@@ -6,6 +6,8 @@ submission.csv
 f1_threshold.png
 val_prediction/
 test_prediction/
+config.json
+kaggle.json
 
 # Data & Logs
 data/
