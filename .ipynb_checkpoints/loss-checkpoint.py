@@ -7,9 +7,10 @@ class DiceFocalLoss(nn.Module):
         self.gamma = config['gamma']
         self.alpha = config['alpha']
         self.smooth = config['smooth']
-        self.weights = torch.tensor(config['class_weights'])
-        # self.register_buffer('weights', torch.tensor(config['class_weights']))
-
+        
+        # 장치(device) 설정을 외부에서 받아 확실하게 지정
+        # register_buffer를 쓰면 모델 이동 시 장치 할당이 자동화됩니다.
+        self.register_buffer('weights', torch.tensor(config['class_weights']))
 
     def forward(self, inputs, targets):
         # inputs: [B, 4, H, W] (Logits)

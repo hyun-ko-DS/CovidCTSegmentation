@@ -1,6 +1,15 @@
-data/
-__pycache__/
+# Results & Models
 results/
+*.pt
+*.pth
+submission.csv
+f1_threshold.png
+val_prediction/
+test_prediction/
+
+# Data & Logs
+data/
+*.npy
+wandb/
+__pycache__/
 .env
-kaggle.json
-config.json
