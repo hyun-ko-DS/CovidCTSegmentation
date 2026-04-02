@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 import wandb
 
-# 1. 데이터셋 정의
+
 class CovidDataset(Dataset):
     def __init__(self, images, masks, transform=None):
         self.images = images
@@ -41,37 +41,7 @@ class CovidDataset(Dataset):
         mask = torch.from_numpy(mask).permute(2, 0, 1).float()
         return image, mask
 
-# 2. MSA 모델 정의 (base_model 생성 로직 최적화)
-class MSASkipUnet(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        # 내부에서 직접 생성하여 중복 호출 및 불필요한 객체 생성 방지
-        self.base_model = smp.Unet(
-            encoder_name=config["encoder_name"],
-            encoder_weights=config["encoder_weights"],
-            in_channels=config["in_channels"],
-            classes=config["classes"],
-            encoder_depth=config["encoder_depth"],                 
-            activation=None
-        )
-        
-        encoder_channels = self.base_model.encoder.out_channels
-        self.msa_blocks = nn.ModuleList([
-            MSABlock(ch) for ch in encoder_channels
-        ])
 
-    def forward(self, x):
-        features = self.base_model.encoder(x)
-        msa_features = []
-        for i, feat in enumerate(features):
-            msa_feat = self.msa_blocks[i](feat)
-            msa_features.append(msa_feat)
-
-        decoder_output = self.base_model.decoder(msa_features)
-        masks = self.base_model.segmentation_head(decoder_output)
-        return masks
-
-# 3. 조기 종료 클래스
 class EarlyStopping:
     def __init__(self, patience=20, verbose=False, delta=0, path='checkpoint.pth'):
         self.patience = patience
@@ -105,24 +75,24 @@ class EarlyStopping:
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
 
-# 4. 유틸리티 함수
+
 def load_config(config_path="config.json"):
     path = Path(config_path)
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
+# HU Windowing : 0 ~ 1로 정규화
 def apply_lung_window(images, config):
     images = images.astype(np.float32)
     window_min, window_max = config['window_min'], config['window_max']
     images = np.clip(images, window_min, window_max)
     return (images - window_min) / (window_max - window_min)
 
-# 5. 모델 및 도구 생성 (핵심 수정 구간)
+
+# MSA Block을 불러오는 함수
 def get_msa_unet_tools(config):
-    # 모델 생성 시 config 주입
     model = MSASkipUnet(config).to(config["device"])
     
-    # Loss 함수에 config 주입 (TypeError 해결)
     criterion = DiceFocalLoss(config) 
 
     optimizer = optim.AdamW(
@@ -150,9 +120,8 @@ def train_model(train_loader, val_loader, config, run_name, save_dir):
 
     for epoch in range(config["EPOCHS"]):
         current_epoch = epoch + 1
-        is_f1_step = (current_epoch % 5 == 0)
+        is_f1_step = (current_epoch % 5 == 0) # F1-Score는 매 5epoch마다 계산
 
-        # [Train]
         model.train()
         train_loss = 0
         train_pbar = tqdm(train_loader, desc=f"Epoch {current_epoch} MSA-Train", leave=False)
@@ -238,6 +207,8 @@ def run_training_pipeline(path = None,config_path="config.json", base_path="./re
         A.HorizontalFlip(p=config["horizontal_flip_p"]),
         A.VerticalFlip(p=config["vertical_flip_p"]),
         A.ShiftScaleRotate(shift_limit=config["shift_limit"], scale_limit=config["scale_limit"], rotate_limit=config["rotate_limit"], p=config["rotate_p"]),
+        A.ElasticTransform(alpha=config['elastic_transform_alpha'], sigma=config['elastic_transform_sigma'],
+         alpha_affine = config['elastic_transform_alpha_affine'], p=config['elastic_transform_p']), # 기하학적 왜곡
         A.RandomBrightnessContrast(p=config["random_brightness_contrast_p"])
     ])
 
@@ -245,3 +216,5 @@ def run_training_pipeline(path = None,config_path="config.json", base_path="./re
     val_loader = DataLoader(CovidDataset(X_val, Y_val), batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["num_workers"])
 
     return train_model(train_loader, val_loader, config, run_name, save_dir)
+
+run_training_pipeline()

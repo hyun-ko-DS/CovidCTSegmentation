@@ -4,223 +4,182 @@ import torch
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import pandas as pd
-from sklearn.metrics import f1_score, precision_score, recall_score, jaccard_score
+from sklearn.metrics import f1_score, jaccard_score
+from sklearn.model_selection import train_test_split
+
+# 프로젝트 모듈 임포트
 from loss import DiceFocalLoss
 from msa import MSABlock, MSASkipUnet
 from train import apply_lung_window
 
-def find_best_threshold(model, images, masks, config, save_path):
+# ==========================================
+# 1. 공통 유틸리티 함수 (Shared Helpers)
+# ==========================================
+
+def get_overlay_mask(mask, is_ch_first=True):
+    """병변 마스크를 시각화용 RGBA 오버레이로 변환"""
+    RED, GREEN = [1, 0, 0, 0.4], [0, 1, 0, 0.4]
+    overlay_gg = np.zeros((512, 512, 4))
+    overlay_cn = np.zeros((512, 512, 4))
+
+    if is_ch_first:
+        overlay_gg[mask[0] > 0.5] = RED
+        overlay_cn[mask[1] > 0.5] = GREEN
+    else:
+        overlay_gg[mask[:, :, 0] > 0.5] = RED
+        overlay_cn[mask[:, :, 1] > 0.5] = GREEN
+    return overlay_gg, overlay_cn
+
+def predict_probabilities(model, images, config):
+    """이미지 리스트로부터 시그모이드 확률맵 추출 (Inference Engine)"""
     model.eval()
     all_probs = []
-    all_gt = []
+    device = config["device"]
 
-    print("🔍 검증 데이터 확률값 추출 중 (Inference)...")
-    for i in tqdm(range(len(images))):
-        img_tensor = torch.from_numpy(images[i]).permute(2, 0, 1).unsqueeze(0).to(config["device"]).float()
-        with torch.no_grad():
+    with torch.no_grad():
+        for i in tqdm(range(len(images)), desc="Inference"):
+            img_tensor = torch.from_numpy(images[i]).permute(2, 0, 1).unsqueeze(0).to(device).float()
             output = model(img_tensor)
-            prob = torch.sigmoid(output).cpu().squeeze().numpy()
+            prob = torch.sigmoid(output).cpu().squeeze().numpy() 
+            all_probs.append(prob)
+            
+    return np.array(all_probs)
 
-        all_probs.append(prob[:2]) 
-        all_gt.append(masks[i][:,:,:2].transpose(2, 0, 1))
+# ==========================================
+# 2. 검증(Validation) 전용 로직
+# ==========================================
 
-    y_prob_gg = np.concatenate([p[0].flatten() for p in all_probs])
-    y_true_gg = np.concatenate([g[0].flatten() for g in all_gt]) > 0.5
-    y_prob_cs = np.concatenate([p[1].flatten() for p in all_probs])
-    y_true_cs = np.concatenate([g[1].flatten() for g in all_gt]) > 0.5
+def find_best_threshold(probs, masks, config, save_path):
+    """Macro F1 최대화 임계값 탐색"""
+    y_prob_gg = np.concatenate([p[0].flatten() for p in probs])
+    y_true_gg = np.concatenate([m[:, :, 0].flatten() for m in masks]) > 0.5
+    y_prob_cs = np.concatenate([p[1].flatten() for p in probs])
+    y_true_cs = np.concatenate([m[:, :, 1].flatten() for m in masks]) > 0.5
 
     thresholds = np.arange(0.05, 0.75, 0.05)
-    macro_f1_scores, gg_f1_scores, cs_f1_scores = [], [], []
+    macro_f1_scores = []
 
-    print("📊 Macro F1-score 계산 및 시각화 준비 중...")
     for thr in thresholds:
         f1_gg = f1_score(y_true_gg, (y_prob_gg > thr).astype(int), zero_division=1)
         f1_cs = f1_score(y_true_cs, (y_prob_cs > thr).astype(int), zero_division=1)
-        macro_f1 = (f1_gg + f1_cs) / 2
-        macro_f1_scores.append(macro_f1)
-        gg_f1_scores.append(f1_gg)
-        cs_f1_scores.append(f1_cs)
+        macro_f1_scores.append((f1_gg + f1_cs) / 2)
 
-    best_idx = np.argmax(macro_f1_scores)
-    best_thr = thresholds[best_idx]
-    best_f1 = macro_f1_scores[best_idx]
-
-    plt.figure(figsize=(12, 7))
-    plt.plot(thresholds, macro_f1_scores, marker='o', color='black', linewidth=3, label='Macro F1')
-    plt.plot(thresholds, gg_f1_scores, marker='s', color='red', alpha=0.6, label='GG F1')
-    plt.plot(thresholds, cs_f1_scores, marker='^', color='green', alpha=0.6, label='Consol F1')
-    plt.axvline(best_thr, color='blue', linestyle=':')
-    plt.title('Threshold vs F1-score Optimization')
-    plt.legend()
-    plt.grid(True, alpha=0.5)
-    plt.savefig(save_path, bbox_inches='tight')
-    plt.close()
-
-    print(f"\n⭐ 최적의 Threshold: {best_thr:.2f} (최대 Macro F1: {best_f1:.4f})")
+    best_thr = thresholds[np.argmax(macro_f1_scores)]
+    
+    # 시각화 그래프 저장
+    plt.figure(figsize=(10, 6))
+    plt.plot(thresholds, macro_f1_scores, marker='o', color='black', label='Macro F1')
+    plt.axvline(best_thr, color='blue', linestyle='--', label=f'Best Thr: {best_thr:.2f}')
+    plt.title('Threshold Optimization')
+    plt.legend(); plt.grid(True); plt.savefig(save_path); plt.close()
+    
     return best_thr
 
-def evaluate_and_save_val(model, images, masks, config, save_dir, threshold=0.5):
-    """
-    model: 학습된 단일 베스트 모델
-    images: X_val (검증 이미지)
-    masks: Y_val (검증 마스크)
-    config: 설정 딕셔너리
-    save_dir: 저장 경로 (런팟 경로 유지)
-    """
+def run_validation_analysis(probs, images, masks, config, threshold):
+    """상세 지표 리포트 및 시각화 저장"""
+    save_dir = os.path.join(config["base_path"], config["run_name"], "val_prediction")
     os.makedirs(save_dir, exist_ok=True)
-
-    # 지표 계산을 위한 리스트
+    
     all_gt_gg, all_pd_gg = [], []
     all_gt_cs, all_pd_cs = [], []
-    total_val_loss = 0
-    
-    # 장치 및 손실함수 설정
-    device = config["device"]
-    criterion = DiceFocalLoss(config)
 
-    # 색상 정의 (RGBA)
-    RED, GREEN = [1, 0, 0, 0.4], [0, 1, 0, 0.4]
+    for i in range(len(images)):
+        pred_mask = (probs[i] > threshold).astype(np.uint8)
+        # 데이터 수집
+        all_gt_gg.append(masks[i][:,:,0].flatten()); all_pd_gg.append(pred_mask[0].flatten())
+        all_gt_cs.append(masks[i][:,:,1].flatten()); all_pd_cs.append(pred_mask[1].flatten())
+        
+        # 샘플 이미지 저장
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        gt_l_gg, gt_l_cn = get_overlay_mask(masks[i], is_ch_first=False)
+        pd_l_gg, pd_l_cn = get_overlay_mask(pred_mask, is_ch_first=True)
+        axes[0].imshow(images[i].squeeze(), cmap='bone'); axes[0].set_title("CT")
+        axes[1].imshow(images[i].squeeze(), cmap='bone'); axes[1].imshow(gt_l_gg); axes[1].imshow(gt_l_cn); axes[1].set_title("GT")
+        axes[2].imshow(images[i].squeeze(), cmap='bone'); axes[2].imshow(pd_l_gg); axes[2].imshow(pd_l_cn); axes[2].set_title("Pred")
+        for ax in axes: ax.axis('off')
+        plt.savefig(f"{save_dir}/val_{i}.png", bbox_inches='tight'); plt.close()
 
-    print(f"🧐 총 {len(images)}장의 검증 데이터 분석 및 시각화 시작...")
+    f1_gg = f1_score(np.concatenate(all_gt_gg)>0.5, np.concatenate(all_pd_gg), zero_division=1)
+    f1_cs = f1_score(np.concatenate(all_gt_cs)>0.5, np.concatenate(all_pd_cs), zero_division=1)
+    print(f"\n✅ [VAL] Combined F1: {(f1_gg+f1_cs)/2:.4f} (GG: {f1_gg:.4f}, CS: {f1_cs:.4f})")
 
-    model.eval()
-    for i in tqdm(range(len(images))):
-        img_np = images[i]
-        gt_mask_np = masks[i] # (512, 512, 4)
+# ==========================================
+# 3. 테스트(Test) 전용 로직
+# ==========================================
 
-        # 1. 모델 추론
-        input_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).to(device).float()
-
-        with torch.no_grad():
-            output = model(input_tensor)
-            # Loss 계산
-            v_loss = criterion(output, torch.from_numpy(gt_mask_np).permute(2,0,1).unsqueeze(0).to(device))
-            total_val_loss += v_loss.item()
-            prob = torch.sigmoid(output).cpu().squeeze().numpy() # (4, 512, 512)
-
-        pred_mask = (prob > threshold).astype(np.uint8)
-
-        # 2. 지표 데이터 수집 (GG: 0, Consol: 1)
-        gt_gg = (gt_mask_np[:,:,0] > 0.5).astype(np.uint8).flatten()
-        pd_gg = pred_mask[0].flatten()
-        gt_cs = (gt_mask_np[:,:,1] > 0.5).astype(np.uint8).flatten()
-        pd_cs = pred_mask[1].flatten()
-
-        all_gt_gg.append(gt_gg); all_pd_gg.append(pd_gg)
-        all_gt_cs.append(gt_cs); all_pd_cs.append(pd_cs)
-
-        # 3. 시각화 및 저장 (코랩 형식 복구)
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-
-        def get_overlay(m, is_ch_first=True):
-            l_gg, l_cn = np.zeros((512,512,4)), np.zeros((512,512,4))
-            if is_ch_first:
-                l_gg[m[0]>0], l_cn[m[1]>0] = RED, GREEN
-            else:
-                l_gg[m[:,:,0]>0.5], l_cn[m[:,:,1]>0.5] = RED, GREEN
-            return l_gg, l_cn
-
-        gt_l_gg, gt_l_cn = get_overlay(gt_mask_np, False)
-        pd_l_gg, pd_l_cn = get_overlay(pred_mask, True)
-
-        axes[0].imshow(img_np.squeeze(), cmap='bone'); axes[0].set_title("Original CT"); axes[0].axis('off')
-        axes[1].imshow(img_np.squeeze(), cmap='bone'); axes[1].imshow(gt_l_gg); axes[1].imshow(gt_l_cn)
-        axes[1].set_title("Ground Truth"); axes[1].axis('off')
-        axes[2].imshow(img_np.squeeze(), cmap='bone'); axes[2].imshow(pd_l_gg); axes[2].imshow(pd_l_cn)
-        axes[2].set_title(f"Prediction (Thr: {threshold})"); axes[2].axis('off')
-
-        plt.savefig(f"{save_dir}/val_sample_{i}.png", bbox_inches='tight')
-        plt.close()
-
-    # 4. 최종 리포트 출력
-    def calc_metrics(gt, pd):
-        gt_all, pd_all = np.concatenate(gt), np.concatenate(pd)
-        f1 = f1_score(gt_all, pd_all, zero_division=1)
-        iou = jaccard_score(gt_all, pd_all, zero_division=1)
-        return f1, iou
-
-    f1_gg, iou_gg = calc_metrics(all_gt_gg, all_pd_gg)
-    f1_cs, iou_cs = calc_metrics(all_gt_cs, all_pd_cs)
-
-    print("\n" + "="*50)
-    print("📊 VALIDATION PERFORMANCE REPORT")
-    print("="*50)
-    print(f"· Avg Val Loss: {total_val_loss/len(images):.4f}")
-    print(f"· mIoU: {(iou_gg + iou_cs)/2:.4f}")
-    print(f"[Ground Glass] F1: {f1_gg:.4f} | IoU: {iou_gg:.4f}")
-    print(f"[Consolidation] F1: {f1_cs:.4f} | IoU: {iou_cs:.4f}")
-    print(f"⭐ FINAL COMBINED F1: {(f1_gg + f1_cs)/2:.4f}")
-    print("="*50)
-
-def run_test_inference_single(model, test_images, config, save_dir, threshold=0.5):
-    """
-    테스트 데이터 시각화도 코랩 오버레이 형식으로 복구
-    """
+def run_test_submission(probs, images, config, threshold):
+    """테스트 결과 시각화 및 CSV 생성"""
+    save_dir = os.path.join(config["base_path"], config["run_name"], "test_prediction")
     os.makedirs(save_dir, exist_ok=True)
-    test_probs = []
-    RED, GREEN = [1, 0, 0, 0.4], [0, 1, 0, 0.4]
 
-    print(f"🧐 {len(test_images)}장의 테스트 이미지 추론 및 시각화 시작...")
-    model.eval()
-    for i in tqdm(range(len(test_images))):
-        img_np = test_images[i]
-        input_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).to(config["device"]).float()
-        
-        with torch.no_grad():
-            output = model(input_tensor)
-            prob = torch.sigmoid(output).cpu().squeeze().numpy()
-            test_probs.append(prob)
+    for i in range(len(images)):
+        pred_mask = (probs[i] > threshold).astype(np.uint8)
+        l_gg, l_cn = get_overlay_mask(pred_mask, is_ch_first=True)
+        plt.figure(figsize=(8, 8))
+        plt.imshow(images[i].squeeze(), cmap='bone'); plt.imshow(l_gg); plt.imshow(l_cn)
+        plt.title(f"Test Result {i}"); plt.axis('off')
+        plt.savefig(f"{save_dir}/test_{i}.png", bbox_inches='tight'); plt.close()
 
-        pred_mask = (prob > threshold).astype(np.uint8)
-        
-        # 오버레이 생성
-        l_gg = np.zeros((512, 512, 4)); l_cn = np.zeros((512, 512, 4))
-        l_gg[pred_mask[0] > 0] = RED
-        l_cn[pred_mask[1] > 0] = GREEN
-
-        plt.figure(figsize=(12, 6))
-        plt.subplot(1, 2, 1); plt.imshow(img_np.squeeze(), cmap='bone'); plt.title(f"Test Image {i}"); plt.axis('off')
-        plt.subplot(1, 2, 2); plt.imshow(img_np.squeeze(), cmap='bone'); plt.imshow(l_gg); plt.imshow(l_cn)
-        plt.title(f"Prediction (Thr: {threshold})"); plt.axis('off')
-
-        plt.savefig(f"{save_dir}/test_result_{i}.png", bbox_inches='tight')
-        plt.close()
-
-    # Submission 생성 로직 유지
-    test_masks_prediction = (np.array(test_probs)[:, :2, :, :].transpose(0, 2, 3, 1) > threshold).astype(int)
+    # Submission 생성
+    test_masks = (probs[:, :2, :, :].transpose(0, 2, 3, 1) > threshold).astype(int)
     submission_path = os.path.join(config["base_path"], config["run_name"], "submission.csv")
-    pd.DataFrame({'Id': np.arange(len(test_masks_prediction.ravel())), 'Predicted': test_masks_prediction.ravel()}).to_csv(submission_path, index=False)
-    print(f"🚀 submission.csv 생성 완료: {submission_path}")
+    pd.DataFrame({'Id': np.arange(test_masks.size), 'Predicted': test_masks.ravel()}).to_csv(submission_path, index=False)
+    print(f"✅ [TEST] Submission CSV 생성 완료: {submission_path}")
 
-def run_inference_pipeline(config, X_val, Y_val, test_images_medseg):
-    # 결과가 저장될 절대 경로 설정
+# ==========================================
+# 4. 통합 추론 파이프라인 (The Switch)
+# ==========================================
+
+def run_inference_pipeline(config, data_images, data_masks=None, is_valid=True, best_thr=0.5):
+    """
+    is_valid=True: Threshold 최적화 + 상세 분석 수행
+    is_valid=False: 지정된 best_thr를 사용하여 Test 결과 생성
+    """
     result_base_dir = os.path.join(config["base_path"], config["run_name"])
     
-    # 1. 모델 로드
+    # 1. 모델 공통 로드
+    print(f"🏗️ 모델 로딩 중 ({'Validation' if is_valid else 'Test'} Mode)...")
     model = MSASkipUnet(config).to(config["device"])
     model_path = os.path.join(result_base_dir, "best.pt")
     checkpoint = torch.load(model_path, map_location=config["device"], weights_only=True)
     model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
-    model.eval()
 
-    # 2. Step 1: Threshold 최적화
-    best_thr_path = os.path.join(result_base_dir, "f1_threshold.png")
-    best_thr = find_best_threshold(model, X_val, Y_val, config, best_thr_path)
+    # 2. 추론 수행
+    probs = predict_probabilities(model, data_images, config)
 
-    # 3. Step 2: Validation 상세 평가 및 시각화
-    val_save_dir = os.path.join(result_base_dir, "val_prediction")
-    evaluate_and_save_val(model, X_val, Y_val, config, val_save_dir, threshold=best_thr)
+    # 3. 모드별 분기 처리
+    if is_valid:
+        # Validation 모드: 최적 임계값을 찾고 분석
+        thr_curve_path = os.path.join(result_base_dir, "f1_threshold_curve.png")
+        best_thr = find_best_threshold(probs, data_masks, config, thr_curve_path)
+        run_validation_analysis(probs, data_images, data_masks, config, best_thr)
+        return best_thr  # 나중에 Test에서 쓰기 위해 반환
+    else:
+        # Test 모드: 주어진 임계값으로 결과만 생성
+        run_test_submission(probs, data_images, config, best_thr)
+        return None
 
-    # 4. Step 3: Test 추론 및 submission 생성
-    test_save_dir = os.path.join(result_base_dir, "test_prediction")
-    X_test_norm = apply_lung_window(test_images_medseg, config)
-    if X_test_norm.ndim == 3: X_test_norm = np.expand_dims(X_test_norm, axis=-1)
-    run_test_inference_single(model, X_test_norm, config, test_save_dir, threshold=best_thr)
+# ==========================================
+# 메인 실행
+# ==========================================
 
-# 4. 추론 파이프라인 실행
-run_inference_pipeline(
-    config=config, 
-    X_val=X_val, 
-    Y_val=Y_val, 
-    test_images_medseg=test_images_medseg
-)
+# 데이터 로드
+X_med = np.load("data/images_medseg.npy")
+Y_med = np.load("data/masks_medseg.npy")
+X_rad = np.load("data/images_radiopedia.npy")
+Y_rad = np.load("data/masks_radiopedia.npy")
+
+X_all = np.concatenate([apply_lung_window(X_med, config), apply_lung_window(X_rad, config)], axis=0)
+Y_all = np.concatenate([Y_med, Y_rad], axis=0).astype(np.float32)
+
+X_train, X_val, Y_train, Y_val = train_test_split(X_all, Y_all, test_size=config['validation_size'], random_state=config['seed'], shuffle=True)
+
+# [Step 1] Validation만 실행해서 최적 임계값 얻기
+found_thr = run_inference_pipeline(config, X_val, Y_val, is_valid=True)
+
+# [Step 2] Test만 실행 (위에서 얻은 임계값 사용)
+test_images_medseg = np.load("data/test_images_medseg.npy")
+X_test_norm = apply_lung_window(test_images_medseg, config)
+if X_test_norm.ndim == 3: X_test_norm = np.expand_dims(X_test_norm, axis=-1)
+
+run_inference_pipeline(config, X_test_norm, is_valid=False, best_thr=found_thr)

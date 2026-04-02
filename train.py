@@ -216,3 +216,5 @@ def run_training_pipeline(path = None,config_path="config.json", base_path="./re
     val_loader = DataLoader(CovidDataset(X_val, Y_val), batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["num_workers"])
 
     return train_model(train_loader, val_loader, config, run_name, save_dir)
+
+run_training_pipeline()
