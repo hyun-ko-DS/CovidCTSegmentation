@@ -1,11 +1,12 @@
 # Results & Models
 results/
+!results/val_prediction/
+!results/test_prediction/
+
+# 개별 파일 단위 무시
 *.pt
 *.pth
 submission.csv
-f1_threshold.png
-val_prediction/
-test_prediction/
 config.json
 kaggle.json
 

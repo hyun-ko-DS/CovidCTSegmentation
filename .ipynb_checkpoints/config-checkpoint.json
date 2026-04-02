@@ -1,0 +1,44 @@
+{
+    "seed": 42,
+    "num_workers": 2,
+
+    "window_min": -1500.0,
+    "window_max": 500.0,
+
+    "horizontal_flip_p": 0.5,
+    "vertical_flip_p": 0.5,
+    "shift_limit": 0.1,
+    "scale_limit": 0.1,
+    "rotate_limit": 20,
+    "rotate_p": 0.5,
+    "elastic_transform_alpha": 1,
+    "elastic_transform_sigma": 50,
+    "elastic_transform_alpha_affine": 50,
+    "elastic_transform_p": 0.5,
+    "random_brightness_limit": 0.2,
+    "random_contrast_limit": 0.2,
+    "random_brightness_contrast_p": 0.3,
+
+    "validation_size": 0.2,
+
+    "encoder_name": "efficientnet-b4",      
+    "encoder_weights": "imagenet",   
+    "in_channels": 1,                 
+    "classes": 4,                    
+    "encoder_depth": 5,
+    "msa_alpha": 0.5,
+    "dilation_rates": [1, 1, 2, 3],
+    "device": "cuda",
+
+    "LR": 1e-4,
+    "EPOCHS": 200,
+    "BATCH_SIZE": 24,
+    "PATIENCE": 20,
+
+    "gamma": 2.0,
+    "alpha": 0.25,
+    "smooth": 1,
+    "class_weights": [1.0, 2.0, 1.0, 1.0],
+    "weight_decay": 1e-4
+
+}

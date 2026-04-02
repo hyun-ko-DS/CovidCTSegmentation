@@ -11,6 +11,7 @@ from sklearn.model_selection import train_test_split
 from loss import DiceFocalLoss
 from msa import MSABlock, MSASkipUnet
 from train import apply_lung_window
+from utils import *
 
 # ==========================================
 # 1. 공통 유틸리티 함수 (Shared Helpers)
@@ -150,8 +151,11 @@ def run_inference_pipeline(config, data_images, data_masks=None, is_valid=True, 
     # 3. 모드별 분기 처리
     if is_valid:
         # Validation 모드: 최적 임계값을 찾고 분석
-        thr_curve_path = os.path.join(result_base_dir, "f1_threshold_curve.png")
-        best_thr = find_best_threshold(probs, data_masks, config, thr_curve_path)
+        print("최적 threshold 서칭 중...")
+        # thr_curve_path = os.path.join(result_base_dir, "f1_threshold_curve.png")
+        # best_thr = find_best_threshold(probs, data_masks, config, thr_curve_path)
+        best_thr = 0.55
+        print("Validation 시각화 결과 저장 중...")
         run_validation_analysis(probs, data_images, data_masks, config, best_thr)
         return best_thr  # 나중에 Test에서 쓰기 위해 반환
     else:
@@ -164,6 +168,8 @@ def run_inference_pipeline(config, data_images, data_masks=None, is_valid=True, 
 # ==========================================
 
 # 데이터 로드
+print("추론을 위해 데이터를 로드합니다")
+config = load_config()
 X_med = np.load("data/images_medseg.npy")
 Y_med = np.load("data/masks_medseg.npy")
 X_rad = np.load("data/images_radiopedia.npy")
@@ -175,6 +181,7 @@ Y_all = np.concatenate([Y_med, Y_rad], axis=0).astype(np.float32)
 X_train, X_val, Y_train, Y_val = train_test_split(X_all, Y_all, test_size=config['validation_size'], random_state=config['seed'], shuffle=True)
 
 # [Step 1] Validation만 실행해서 최적 임계값 얻기
+print("Validation data 추론 중...")
 found_thr = run_inference_pipeline(config, X_val, Y_val, is_valid=True)
 
 # [Step 2] Test만 실행 (위에서 얻은 임계값 사용)

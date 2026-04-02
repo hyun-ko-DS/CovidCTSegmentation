@@ -1,5 +1,6 @@
 from loss import DiceFocalLoss
 from msa import MSABlock, MSASkipUnet
+from utils import *
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -74,20 +75,6 @@ class EarlyStopping:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model...')
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
-
-
-def load_config(config_path="config.json"):
-    path = Path(config_path)
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-# HU Windowing : 0 ~ 1로 정규화
-def apply_lung_window(images, config):
-    images = images.astype(np.float32)
-    window_min, window_max = config['window_min'], config['window_max']
-    images = np.clip(images, window_min, window_max)
-    return (images - window_min) / (window_max - window_min)
-
 
 # MSA Block을 불러오는 함수
 def get_msa_unet_tools(config):
@@ -187,34 +174,46 @@ def train_model(train_loader, val_loader, config, run_name, save_dir):
     return model
 
 # 7. 메인 파이프라인
-def run_training_pipeline(path = None,config_path="config.json", base_path="./results", run_name="exp_final"):
-    config = load_config(config_path)
+def run_training_pipeline(config_path="config.json", base_path="./results", run_name="exp_final"):
+    # 1. 설정 및 경로 준비
+    config = load_config(config_path) # utils.py에 정의된 함수 사용
     save_dir = os.path.join(base_path, run_name)
     os.makedirs(save_dir, exist_ok=True)
 
-    # 데이터 로드 (경로는 사용자 환경에 맞춰 수정 필요)
+    # 2. 데이터 로드 및 전처리
+    print("💾 학습 데이터를 로드하고 전처리합니다...")
     X_med = np.load("data/images_medseg.npy")
     Y_med = np.load("data/masks_medseg.npy")
     X_rad = np.load("data/images_radiopedia.npy")
     Y_rad = np.load("data/masks_radiopedia.npy")
 
+    # apply_lung_window는 utils.py에서 가져온 것 사용
     X_all = np.concatenate([apply_lung_window(X_med, config), apply_lung_window(X_rad, config)], axis=0)
     Y_all = np.concatenate([Y_med, Y_rad], axis=0).astype(np.float32)
 
-    X_train, X_val, Y_train, Y_val = train_test_split(X_all, Y_all, test_size=config['validation_size'], random_state=config['seed'], shuffle=True)
+    X_train, X_val, Y_train, Y_val = train_test_split(
+        X_all, Y_all, 
+        test_size=config['validation_size'], 
+        random_state=config['seed'], 
+        shuffle=True
+    )
 
+    # 3. Augmentation 설정
     train_transform = A.Compose([
         A.HorizontalFlip(p=config["horizontal_flip_p"]),
         A.VerticalFlip(p=config["vertical_flip_p"]),
         A.ShiftScaleRotate(shift_limit=config["shift_limit"], scale_limit=config["scale_limit"], rotate_limit=config["rotate_limit"], p=config["rotate_p"]),
         A.ElasticTransform(alpha=config['elastic_transform_alpha'], sigma=config['elastic_transform_sigma'],
-         alpha_affine = config['elastic_transform_alpha_affine'], p=config['elastic_transform_p']), # 기하학적 왜곡
+                           alpha_affine=config['elastic_transform_alpha_affine'], p=config['elastic_transform_p']),
         A.RandomBrightnessContrast(p=config["random_brightness_contrast_p"])
     ])
 
-    train_loader = DataLoader(CovidDataset(X_train, Y_train, train_transform), batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["num_workers"])
-    val_loader = DataLoader(CovidDataset(X_val, Y_val), batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["num_workers"])
+    # 4. Loader 준비
+    train_loader = DataLoader(CovidDataset(X_train, Y_train, train_transform), batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config.get("num_workers", 4))
+    val_loader = DataLoader(CovidDataset(X_val, Y_val), batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config.get("num_workers", 4))
 
+    # 5. 학습 시작
     return train_model(train_loader, val_loader, config, run_name, save_dir)
 
-run_training_pipeline()
+if __name__ == "__main__":
+    run_training_pipeline(run_name="exp_final")
