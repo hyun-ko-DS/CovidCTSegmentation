@@ -1,7 +1,5 @@
-# Results & Models
 results/
-!results/val_prediction/
-!results/test_prediction/
+data/
 
 # 개별 파일 단위 무시
 *.pt
