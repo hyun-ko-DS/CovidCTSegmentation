@@ -216,3 +216,11 @@ def run_inference_pipeline(config, X_val, Y_val, test_images_medseg):
     X_test_norm = apply_lung_window(test_images_medseg, config)
     if X_test_norm.ndim == 3: X_test_norm = np.expand_dims(X_test_norm, axis=-1)
     run_test_inference_single(model, X_test_norm, config, test_save_dir, threshold=best_thr)
+
+# 4. 추론 파이프라인 실행
+run_inference_pipeline(
+    config=config, 
+    X_val=X_val, 
+    Y_val=Y_val, 
+    test_images_medseg=test_images_medseg
+)

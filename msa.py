@@ -38,7 +38,7 @@ class MSABlock(nn.Module):
         self.spatial_scales = nn.ModuleList()
         # ch1: 1x1 Conv로 아주 미세한 점이나 선 포착
         if ch1 > 0:
-            self.c.append(nn.Conv2d(in_channels, ch1, kernel_size=1))
+            self.spatial_scales.append(nn.Conv2d(in_channels, ch1, kernel_size=1))
 
         # Dilated Conv: 필터 사이의 간격을 벌려 넓은 맥락과 좁은 맥락의 공간 정보를 모두 추출
         for i, ch in enumerate(active_channels[1:], 1): # ch1 이후, 즉 ch2, ch3, ch4가 대상.

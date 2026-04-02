@@ -43,3 +43,5 @@ def run_loading_pipeline(
     print("프로젝트 데이터 경로:", local_path)
     print("파일 목록:", os.listdir(local_path))
     return str(local_path)
+
+run_loading_pipeline()
